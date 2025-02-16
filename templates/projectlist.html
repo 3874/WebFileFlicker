@@ -77,18 +77,18 @@
             });
 
             function loadProjects() {
-            $.ajax({
-                url: '/projects',
-                method: 'GET',
-                success: function(response) {
-                    // DataTable에 데이터 추가
-                    projectTable.clear().rows.add(response.data).draw();
-                },
-                error: function(xhr) {
-                    alert('프로젝트를 불러오는 데 문제가 발생했습니다.');
-                }
-            });
-        }
+                $.ajax({
+                    url: '/projects',
+                    method: 'GET',
+                    success: function(response) {
+                        // DataTable에 데이터 추가
+                        projectTable.clear().rows.add(response.data).draw();
+                    },
+                    error: function(xhr) {
+                        alert('프로젝트를 불러오는 데 문제가 발생했습니다.');
+                    }
+                });
+            }
 
             $('#projectTable tbody').on('click', 'tr', function () {
                 const data = projectTable.row(this).data(); // companyTable에서 projectTable로 변경
@@ -97,15 +97,6 @@
                     window.location.href = `/project-chat?projectId=${projectId}`; // 페이지 이동
                 }
             });
-        
-            $('#AddBtn').click(function() {
-            const newProjectData = {
-                title: "No Title", 
-                summary: "No Summary",
-                contents: "", 
-                related_files: [], 
-                related_companies: [] 
-            };
 
             $('#BackupBtn').click(function() {
                 $.ajax({
@@ -119,23 +110,32 @@
                     }
                 });
             });
+        
+            $('#AddBtn').click(function() {
+                const newProjectData = {
+                    title: "No Title", 
+                    summary: "No Summary",
+                    contents: "", 
+                    related_files: [], 
+                    related_companies: [] 
+                };
 
-            $.ajax({
-                url: '/newProject',
-                method: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify(newProjectData),
-                success: function(response) {
-                    // 성공적으로 값을 받으면 projectId를 URL에 추가하여 페이지 이동
-                    const projectId = response.data.projectId;
-                    window.location.href = `/project-chat?projectId=${projectId}`;
-                },
-                error: function(xhr) {
-                    // 실패 시 경고 메시지 표시
-                    alert('현재 서버에 문제가 있습니다. 프로젝트를 추가할 수 없습니다.');
-                }
+                $.ajax({
+                    url: '/newProject',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(newProjectData),
+                    success: function(response) {
+                        // 성공적으로 값을 받으면 projectId를 URL에 추가하여 페이지 이동
+                        const projectId = response.data.projectId;
+                        window.location.href = `/project-chat?projectId=${projectId}`;
+                    },
+                    error: function(xhr) {
+                        // 실패 시 경고 메시지 표시
+                        alert('현재 서버에 문제가 있습니다. 프로젝트를 추가할 수 없습니다.');
+                    }
+                });
             });
-        });
     
         });
     
