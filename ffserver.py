@@ -5,6 +5,8 @@ from tinydb import TinyDB, Query
 from flask_cors import CORS
 from datetime import datetime
 from bs4 import BeautifulSoup
+import urllib.parse  # 구글 검색 쿼리 인코딩용
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 
@@ -33,11 +35,9 @@ db_path2 = os.path.join(DB_FOLDER, 'companyDB.json')
 db_path3 = os.path.join(DB_FOLDER, 'projectDB.json')
 
 # 데이터베이스 초기화
-
 db = TinyDB(db_path)
 db2 = TinyDB(db_path2)
 db3 = TinyDB(db_path3)
-
 
 # 테이블 생성
 fileTable = db.table('fileTable')
@@ -71,6 +71,11 @@ def upload_file():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'error': 'No selected file.'}), 400
+
+    # 예시: 파일 확장자 제한 (필요 시 활성화)
+    # ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif'}
+    # if '.' not in file.filename or file.filename.rsplit('.', 1)[1].lower() not in ALLOWED_EXTENSIONS:
+    #     return jsonify({'error': 'File type not allowed.'}), 400
 
     file_name = file.filename
     file.seek(0)
@@ -114,22 +119,25 @@ def update_file(fileId):
     data = request.get_json()
     if not data:
         return jsonify({'error': 'Invalid JSON data.'}), 400
-    print(data)
+    logging.debug(f"Update file data: {data}")
     File = Query()
     file_entry = fileTable.get(File.fileId == fileId)
 
     if not file_entry:
         return jsonify({'error': 'File not found.'}), 404
     
-    Tagarray = data['tags'].split(',')
-    file_entry['summary'] = data['summary']
-    file_entry['comments'] = data['comments']
-    file_entry['tags'] = Tagarray
-    current_time = datetime.now().isoformat()
-    file_entry['updatedAt'] = current_time
-    print(file_entry)
-    fileTable.update(file_entry, doc_ids=[file_entry.doc_id])
+    # tags 문자열을 콤마로 분리 (필요 시 strip() 등 추가)
+    tag_array = data.get('tags', '').split(',')
+    update_data = {
+        'summary': data.get('summary', ''),
+        'comments': data.get('comments', ''),
+        'tags': tag_array,
+        'updatedAt': datetime.now().isoformat()
+    }
+    fileTable.update(update_data, Query().fileId == fileId)
 
+    # 업데이트 후 다시 가져오기
+    file_entry = fileTable.get(File.fileId == fileId)
     return jsonify({'success': True, 'data': file_entry}), 200
 
 @FFapp.route('/removeFile/<string:fileId>', methods=['DELETE'])
@@ -144,7 +152,7 @@ def remove_file(fileId):
     file_path = file_entry['location']
 
     # 데이터베이스에서 파일 정보 삭제
-    result = fileTable.remove(File.fileId == fileId)
+    fileTable.remove(Query().fileId == fileId)
     
     # 실제 파일 시스템에서 파일 삭제
     try:
@@ -164,7 +172,7 @@ def find_file(fileId):
     file_entry = fileTable.get(File.fileId == fileId)
     
     if not file_entry:
-        return jsonify({'error': 'file 찾을 수 없습니다.'}), 404
+        return jsonify({'error': '파일을 찾을 수 없습니다.'}), 404
 
     return jsonify({'success': True, 'data': file_entry}), 200
 
@@ -187,7 +195,6 @@ def complex_search():
             }]
         )
         response.raise_for_status()
-        
         return response.content
     except requests.exceptions.HTTPError as e:
         return jsonify({'error': f'HTTP error occurred: {str(e)}'}), 500
@@ -200,7 +207,6 @@ def complex_search():
 
 @FFapp.route('/addVectorDB', methods=['POST'])
 def add_vector_db():
-    # formData를 받아서 처리
     if 'file' not in request.files:
         return jsonify({'error': 'No file part in the request.'}), 400
 
@@ -208,11 +214,9 @@ def add_vector_db():
     if file.filename == '':
         return jsonify({'error': 'No selected file.'}), 400
 
-    # 파일을 임시로 저장
     temp_file_path = os.path.join(UPLOAD_FOLDER, file.filename)
     file.save(temp_file_path)
 
-    # pdfExtracURL로 전송
     pdfExtracURL = f"{QR_config.get('n8n_URL')}/webhook/addpdfinvectordb"
     try:
         with open(temp_file_path, 'rb') as f:
@@ -225,7 +229,6 @@ def add_vector_db():
     except requests.exceptions.RequestException as e:
         return jsonify({'error': f'An error occurred: {str(e)}'}), 500
     finally:
-        # 임시 파일 삭제
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
@@ -247,9 +250,9 @@ def search_file():
                      File.comments.search(keyword))
         else:
             query &= (File.file_name.search(keyword) | 
-                       File.tags.search(keyword) | 
-                       File.summary.search(keyword) |
-                       File.comments.search(keyword))
+                      File.tags.search(keyword) | 
+                      File.summary.search(keyword) |
+                      File.comments.search(keyword))
     
     results = fileTable.search(query)
     return jsonify({'success': True, 'results': results}), 200
@@ -284,14 +287,13 @@ def get_files():
 @FFapp.route('/downloadFile/<fileId>', methods=['GET'])
 def download_file(fileId):
     File = Query()
-
     file_entry = fileTable.get(File.fileId == fileId)
 
     if not file_entry:
         return jsonify({'error': 'File not found.'}), 404
 
     file_name = file_entry['file_name']
-    print(UPLOAD_FOLDER)
+    logging.debug(f"Downloading file from folder: {UPLOAD_FOLDER}")
     return send_from_directory(UPLOAD_FOLDER, file_name)
 
 @FFapp.route('/newProject', methods=['POST'])
@@ -334,21 +336,22 @@ def update_project(projectId):
     if not project_entry:
         return jsonify({'error': 'Project not found.'}), 404
     
+    update_data = {}
     for key, value in data.items():
-        if key in project_entry and value is not None:
-            project_entry[key] = value
+        # 필요에 따라 업데이트 가능한 키를 제한할 수 있음
+        if value is not None:
+            update_data[key] = value
 
-    current_time = datetime.now().isoformat()
-    project_entry['updatedAt'] = current_time
+    update_data['updatedAt'] = datetime.now().isoformat()
 
-    projectTable.update({key: value}, doc_ids=[project_entry.doc_id])
-
+    projectTable.update(update_data, Query().projectId == projectId)
+    project_entry = projectTable.get(Project.projectId == projectId)
     return jsonify({'success': True, 'data': project_entry}), 200
 
 @FFapp.route('/removeProject/<string:projectId>', methods=['DELETE'])
 def remove_project(projectId):
     Project = Query()
-    result = projectTable.remove(Project.projectId == projectId)
+    result = projectTable.remove(Query().projectId == projectId)
     if result == 0:
         return jsonify({'error': 'Project not found.'}), 404
 
@@ -357,7 +360,7 @@ def remove_project(projectId):
 @FFapp.route('/findProject/<string:projectId>', methods=['GET'])
 def find_project(projectId):
     Project = Query()
-    project_entry = projectTable.get(Project.projectId == projectId)
+    project_entry = projectTable.get(Query().projectId == projectId)
     
     if not project_entry:
         return jsonify({'error': '프로젝트를 찾을 수 없습니다.'}), 404
@@ -382,7 +385,7 @@ def search_project():
         else:
             query &= (Project.title.search(keyword) | 
                       Project.summary.search(keyword) |
-                       Project.contents.search(keyword))
+                      Project.contents.search(keyword))
     
     results = projectTable.search(query)
     return jsonify({'success': True, 'results': results}), 200
@@ -417,9 +420,9 @@ def get_projects():
 def get_companies():
     start = int(request.args.get('start', 0))
     length = int(request.args.get('length', 10))
-    search_value = request.args.get('search', {}).get('value', '').lower()
+    search_value = request.args.get('search[value]', '').lower()  # 수정된 부분
     
-    companies = companyTable.all()  # 모든 회사 데이터를 한 번만 가져옴
+    companies = companyTable.all()
     if search_value:
         companies = [company for company in companies if (
             search_value in company['companyName'].lower() or
@@ -430,13 +433,13 @@ def get_companies():
         )]
 
     records_with_id = [{'companyId': company['companyId'], **company} for company in companies]
-    records_with_id.reverse()  # 필요에 따라 정렬 기준을 명확히 해야 함
+    records_with_id.reverse()
     paginated_companies = records_with_id[start:start + length]
     
     response = {
         "draw": int(request.args.get('draw', 1)),
         "recordsTotal": len(companyTable.all()),
-        "recordsFiltered": len(companies),  # 필터링된 회사 수
+        "recordsFiltered": len(companies),
         "data": paginated_companies
     }
     return jsonify(response)
@@ -454,7 +457,6 @@ def add_company():
         company_id = str(uuid.uuid4())
         current_time = datetime.now().isoformat()
     
-        # 회사 정보를 companyTable에 저장하는 로직
         company_data = {
             'companyId': company_id,
             'companyName': companyName,
@@ -478,56 +480,52 @@ def update_company(companyId):
         return jsonify({'error': 'Invalid JSON data.'}), 400
     
     Company = Query()
-    company_entry = companyTable.get(Company.companyId == companyId)
+    company_entry = companyTable.get(Query().companyId == companyId)
 
     if not company_entry:
-        return jsonify({'error': 'File not found.'}), 404
+        return jsonify({'error': 'Company not found.'}), 404
     
+    update_data = {}
     for key, value in data.items():
-        if key in company_entry and value is not None:
-            company_entry[key] = value
+        if value is not None:
+            update_data[key] = value
 
-    current_time = datetime.now().isoformat()
-    company_entry['updatedAt'] = current_time
+    update_data['updatedAt'] = datetime.now().isoformat()
 
-    companyTable.update(company_entry, doc_ids=[company_entry.doc_id])
-
+    companyTable.update(update_data, Query().companyId == companyId)
+    company_entry = companyTable.get(Query().companyId == companyId)
     return jsonify({'success': True, 'data': company_entry}), 200
 
 @FFapp.route('/deleteCompany/<string:companyId>', methods=['DELETE'])
 def delete_company(companyId):
     Company = Query()
-    # companyId에 해당하는 회사 정보를 찾습니다.
-    company_entry = companyTable.get(Company.companyId == companyId)
+    company_entry = companyTable.get(Query().companyId == companyId)
 
     if not company_entry:
         return jsonify({'error': 'Company not found.'}), 404
     
-    # 회사 정보를 삭제합니다.
     companyTable.remove(doc_ids=[company_entry.doc_id])
-
     return jsonify({'success': True, 'message': 'Company deleted successfully!'}), 200
 
 @FFapp.route('/saveSettings', methods=['POST'])
 def save_settings():
     data = request.get_json()
     if data:
-        # 설정 값을 저장하는 로직 추가
         openai_key = data.get('OPENAI_KEY')
         serp_api = data.get('serpAPI')
         n8n_url = data.get('n8n_URL')
         port = data.get('port')
 
-        config_path = os.path.join('setting', 'config.json')
-        with open(config_path, 'r+') as config_file:
+        config_path_local = os.path.join(SETTING_FOLDER, 'config.json')
+        with open(config_path_local, 'r+') as config_file:
             config = json.load(config_file)
             config['OPENAI_KEY'] = openai_key
             config['serpAPI'] = serp_api
             config['n8n_URL'] = n8n_url
             config['port'] = port
-            config_file.seek(0)  # 파일 포인터를 처음으로 이동
+            config_file.seek(0)
             json.dump(config, config_file, indent=4)
-            config_file.truncate()  # 기존 내용 삭제
+            config_file.truncate()
 
         return jsonify({'success': True}), 200
     return jsonify({'success': False, 'message': 'Invalid data'}), 400
@@ -541,7 +539,7 @@ def handle_exception(e):
 def get_prompts():
     prompt_path = os.path.join(SETTING_FOLDER, "prompts.json")
     if not os.path.exists(prompt_path):
-        raise FileNotFoundError("Prompts file not found. Ensure config.json exists in the setting directory.")
+        raise FileNotFoundError("Prompts file not found. Ensure prompts.json exists in the setting directory.")
 
     with open(prompt_path, "r") as json_file2:
         FF_prompts = json.load(json_file2)
@@ -555,12 +553,10 @@ def update_prompts():
     prompt_path = os.path.join(SETTING_FOLDER, "prompts.json")
 
     if not os.path.exists(prompt_path):
-        raise FileNotFoundError("Prompts file not found. Ensure config.json exists in the setting directory.")
-
-    FF_prompts = data
+        raise FileNotFoundError("Prompts file not found. Ensure prompts.json exists in the setting directory.")
 
     with open(prompt_path, "w") as json_file:
-        json.dump(FF_prompts, json_file, indent=4)
+        json.dump(data, json_file, indent=4)
     
     with open(prompt_path, "r") as json_file2:
         FF_prompts = json.load(json_file2)
@@ -569,11 +565,11 @@ def update_prompts():
 
 @FFapp.route('/getSettings', methods=['GET'])
 def get_settings():
-    config_path = os.path.join(SETTING_FOLDER, "config.json")
-    if not os.path.exists(config_path):
-        raise FileNotFoundError("Prompts file not found. Ensure config.json exists in the setting directory.")
+    config_path_local = os.path.join(SETTING_FOLDER, "config.json")
+    if not os.path.exists(config_path_local):
+        raise FileNotFoundError("Config file not found. Ensure config.json exists in the setting directory.")
 
-    with open(config_path, "r") as json_file2:
+    with open(config_path_local, "r") as json_file2:
         FF_configs = json.load(json_file2)
     return jsonify({'success': True, 'data': FF_configs}), 200
 
@@ -589,7 +585,7 @@ def backup_data():
 
         backup_url = "https://example.com/backup" 
         headers = {
-            'Authorization': f'Bearer {QR_config['FileFlicker_API_KEY']}',
+            'Authorization': f'Bearer {QR_config["FileFlicker_API_KEY"]}',
             'Content-Type': 'application/json'
         }
         response = requests.post(backup_url, json={
@@ -601,20 +597,17 @@ def backup_data():
 
         return jsonify({'success': True, 'message': 'Backup completed successfully.'}), 200
     except Exception as e:
-        print(f"Error during backup: {e}")
+        logging.error(f"Error during backup: {e}")
         return jsonify({'error': 'An error occurred during backup.'}), 500
 
 @FFapp.route('/AISearch', methods=['POST'])
 def AI_search():
     data = request.get_json()
-
-    if not data:
+    if not data or not isinstance(data, list) or not data:
         return jsonify({'error': 'Invalid JSON data.'}), 400
     
     chatInput = data[0].get('chatInput', '') 
-
     AI_url = 'https://api.openai.com/v1/chat/completions'
-
     search_results = chat_with_openai(AI_url, chatInput)
     
     return jsonify({'reply': search_results})
@@ -623,19 +616,19 @@ def AI_search():
 def google_search_BS():
     data = request.get_json()
     num_results = 30
-    if not data:
+    if not data or not isinstance(data, list) or not data:
         return jsonify({'error': 'Invalid JSON data.'}), 400
     
     chatInput = data[0].get('chatInput', '') 
-
     url1 = 'https://api.openai.com/v1/chat/completions'
-
-    resp = chat_with_openai(url1, f"Extract the key keywords from the following text and provide a brief description for each keyword:'{chatInput}' Present the results in a structured format with keywords and their descriptions.")
-
+    resp = chat_with_openai(url1, f"Extract the key keywords from the following text and provide a brief description for each keyword: '{chatInput}' Present the results in a structured format with keywords and their descriptions.")
+    
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0'
     }
-    search_url = f"https://www.google.com/search?q={resp}&num={num_results}"
+    # 구글 검색 쿼리 안전하게 인코딩
+    encoded_query = urllib.parse.quote_plus(resp)
+    search_url = f"https://www.google.com/search?q={encoded_query}&num={num_results}"
     
     response = requests.get(search_url, headers=headers)
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -656,9 +649,7 @@ def google_search_BS():
     return jsonify({'reply': search_results})
 
 def chat_with_openai(Requrl, chatInput):
-
     url = Requrl
-    
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {QR_config["OPENAI_KEY"]}'
@@ -676,22 +667,28 @@ def chat_with_openai(Requrl, chatInput):
 
     try:
         response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()  # Raise an error on a bad response
+        response.raise_for_status()
         result = response.json()
         logging.info('Response received from OpenAI API')
         summary = result['choices'][0]['message']['content'].strip()
         return summary
     except requests.exceptions.HTTPError as err:
         logging.error(f'HTTP error occurred: {err}')
-        if response:
+        try:
             error_details = response.json()
             logging.error(f'Error details: {error_details}')
+        except Exception:
+            logging.error('No error details available.')
         return "An error occurred while processing your request."
-    
+    except Exception as ex:
+        logging.error(f'Unexpected error: {ex}')
+        return "An unexpected error occurred."
+
 def google_search_api(query, num_results=10):
     service = googleapiclient.discovery.build("customsearch", "v1", developerKey=QR_config["GOOGLE_API_KEY"])
     res = service.cse().list(q=query, cx=QR_config["SEARCH_ENGINE_ID"], num=num_results).execute()
-    return res['items']
+    return res.get('items', [])
 
 if __name__ == '__main__':
-    FFapp.run(host='0.0.0.0', port=QR_config['port'], debug=True)
+    port = int(QR_config.get('port', 5000))
+    FFapp.run(host='0.0.0.0', port=port, debug=True)
